@@ -12,6 +12,8 @@ When a user asks about weather:
 
 Be proactive: if someone asks about a location, geocode it first, then get the forecast.
 If they mention travel or outdoor activities, consider checking for alerts too.
+
+Think explicity and give detailed responses when calling to use specific tools.
 """
 
 from weather.server import get_tool_specs

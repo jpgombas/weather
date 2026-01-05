@@ -9,7 +9,8 @@ import json
 import sys
 import os
 import logging
-from typing import Any, Dict
+import uuid
+from typing import Any, Dict, Optional, Callable
 from weather import MCPStdIOClient, MCPClientError
 from config import SYSTEM_PROMPT, TOOLS
 
@@ -82,8 +83,12 @@ class WeatherAgent:
             return {"error": str(e)}
     
     
-    def chat(self, user_message: str) -> str:
-        """Process a user message and return the agent's response"""
+    def chat(self, user_message: str, on_update: Optional[Callable[[Dict[str, Any]], None]] = None) -> str:
+        """Process a user message and return the agent's response
+
+        on_update: optional callback called with interim updates when the model emits
+        text while planning tool uses. Callback receives a dict: {"content": str, "status": "thinking"|"done"}.
+        """
         
         # Add user message to history
         self.conversation_history.append({
@@ -125,8 +130,16 @@ class WeatherAgent:
                 # Process each tool use
                 tool_results = []
                 for block in response.content:
-                    if block.type == "text": 
-                        print(block.text)
+                    if block.type == "text":
+                        # Emit interim thought to UI if callback provided, else print
+                        try:
+                            if on_update:
+                                thought_id = str(uuid.uuid4())
+                                on_update({"content": block.text, "status": "thinking", "thought_id": thought_id})
+                            else:
+                                print(block.text)
+                        except Exception as e:
+                            agent_logger.error(f"on_update callback failed: {e}")
                     if block.type == "tool_use":
                         tool_name = block.name
                         tool_input = block.input
@@ -164,6 +177,13 @@ class WeatherAgent:
                     "role": "assistant",
                     "content": final_response
                 })
+
+                # Emit final update if callback provided
+                try:
+                    if on_update:
+                        on_update({"content": final_response, "status": "done", "is_final": True})
+                except Exception as e:
+                    agent_logger.error(f"on_update callback failed: {e}")
                 
                 return final_response
             else:

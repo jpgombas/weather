@@ -122,17 +122,26 @@ def handle_send_or_pending(n_clicks, n_submit, pending, value, conversation):
         # Add user message
         conversation.append({'role': 'user', 'content': value.strip()})
 
-        # Add assistant placeholder message immediately and start background thread to fetch actual response
+        # Start background thread to fetch actual response; interim thoughts will be appended as their own assistant messages
         placeholder_id = str(uuid.uuid4())
-        conversation.append({'role': 'assistant', 'content': 'Thinking...', 'id': placeholder_id, 'status': 'thinking'})
 
         def _background_chat(user_text, pid):
+            # on_update appends interim updates into PENDING_RESPONSES[pid] as a list
+            def _on_update(payload):
+                with PENDING_LOCK:
+                    PENDING_RESPONSES.setdefault(pid, []).append(payload)
+
             try:
-                resp = agent.chat(user_text)
+                resp = agent.chat(user_text, on_update=_on_update)
+                # Ensure final is present but avoid double-appending if on_update already sent one
+                with PENDING_LOCK:
+                    existing = PENDING_RESPONSES.get(pid, [])
+                    has_final = any(isinstance(u, dict) and u.get('is_final') for u in existing)
+                    if not has_final:
+                        PENDING_RESPONSES.setdefault(pid, []).append({"content": resp, "status": "done", "is_final": True})
             except Exception as e:
-                resp = f"Error: {e}"
-            with PENDING_LOCK:
-                PENDING_RESPONSES[pid] = resp
+                with PENDING_LOCK:
+                    PENDING_RESPONSES.setdefault(pid, []).append({"content": f"Error: {e}", "status": "done", "is_final": True})
 
         threading.Thread(target=_background_chat, args=(value.strip(), placeholder_id), daemon=True).start()
 
@@ -144,16 +153,51 @@ def handle_send_or_pending(n_clicks, n_submit, pending, value, conversation):
         if not pending:
             raise dash.exceptions.PreventUpdate
         for pid, resp in pending.items():
-            found = False
-            for entry in conversation:
-                if entry.get('role') == 'assistant' and entry.get('id') == pid:
-                    entry['content'] = resp
-                    entry['status'] = 'done'
-                    found = True
-                    break
-            if not found:
-                # If no placeholder found, append as a new assistant message
-                conversation.append({'role': 'assistant', 'content': resp, 'status': 'done'})
+            # If the server returned a list of updates for this pid, iterate them
+            if isinstance(resp, list):
+                for upd in resp:
+                    if isinstance(upd, dict):
+                        content = upd.get('content')
+                        status = upd.get('status', 'done')
+                        thought_id = upd.get('thought_id')
+                        is_final = upd.get('is_final', False)
+                    else:
+                        content = upd
+                        status = 'done'
+                        thought_id = None
+                        is_final = False
+
+                    if status == 'thinking':
+                        # Append each interim thought as its own assistant message bubble
+                        conversation.append({'role': 'assistant', 'content': content, 'status': 'thinking', 'id': thought_id})
+                    else:
+                        # Final update: append final assistant message
+                        final_id = thought_id or f"{pid}-final"
+                        conversation.append({'role': 'assistant', 'content': content, 'status': 'done', 'id': final_id})
+            else:
+                # Fallback to single payload behavior for backwards compatibility
+                found = False
+                # support dict payloads from agent on_update
+                if isinstance(resp, dict):
+                    content = resp.get('content')
+                    status = resp.get('status', 'done')
+                else:
+                    content = resp
+                    status = 'done'
+                for entry in conversation:
+                    if entry.get('role') == 'assistant' and entry.get('id') == pid:
+                        if status == 'thinking':
+                            existing = entry.get('content', '')
+                            if content and content not in existing:
+                                entry['content'] = (existing + '\n' + content) if existing else content
+                            entry['status'] = 'thinking'
+                        else:
+                            entry['content'] = content
+                            entry['status'] = 'done'
+                        found = True
+                        break
+                if not found:
+                    conversation.append({'role': 'assistant', 'content': content, 'status': status})
         return conversation, dash.no_update
 
     # If none of the above, do nothing

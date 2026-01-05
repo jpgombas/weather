@@ -112,13 +112,6 @@ A screenshot of the minimal Dash UI (the single-page chat interface):
 
 ---
 
-## Development & testing
-
-- Tests: the `tests/` folder is present for adding unit and integration tests. Use `pytest` to run tests once tests are added.
-- Linting / type checking: recommended to use `ruff`/`flake8`/`mypy` depending on preference (not included in the minimal demo).
-
----
-
 ## Operational notes
 
 - The MCP transport is stdio (newline-delimited JSON). The `MCPStdIOClient` expects the server to write JSON objects line-by-line to stdout and to accept JSON messages on stdin.

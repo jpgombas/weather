@@ -1,5 +1,8 @@
 # Weather Agent (MCP Demo)
 
+![Simple UI](assets/simple_UI.png)
+
+---
 🌤️ **Overview**
 
 This repository is a concise, technical demonstration of an agent that uses the Model Context Protocol (MCP) to access live weather data. It provides:
@@ -101,14 +104,6 @@ python -m weather.server
 ```
 
 You can then invoke tools using the provided `MCPStdIOClient` or by implementing your own MCP client.
-
----
-
-## Screenshots
-
-A screenshot of the minimal Dash UI (the single-page chat interface):
-
-![Simple UI](assets/simple_UI.png)
 
 ---
 

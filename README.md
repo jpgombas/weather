@@ -104,6 +104,14 @@ You can then invoke tools using the provided `MCPStdIOClient` or by implementing
 
 ---
 
+## Screenshots
+
+A screenshot of the minimal Dash UI (the single-page chat interface):
+
+![Simple UI](assets/simple_UI.png)
+
+---
+
 ## Development & testing
 
 - Tests: the `tests/` folder is present for adding unit and integration tests. Use `pytest` to run tests once tests are added.

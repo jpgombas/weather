@@ -153,51 +153,25 @@ def handle_send_or_pending(n_clicks, n_submit, pending, value, conversation):
         if not pending:
             raise dash.exceptions.PreventUpdate
         for pid, resp in pending.items():
-            # If the server returned a list of updates for this pid, iterate them
-            if isinstance(resp, list):
-                for upd in resp:
-                    if isinstance(upd, dict):
-                        content = upd.get('content')
-                        status = upd.get('status', 'done')
-                        thought_id = upd.get('thought_id')
-                        is_final = upd.get('is_final', False)
-                    else:
-                        content = upd
-                        status = 'done'
-                        thought_id = None
-                        is_final = False
-
-                    if status == 'thinking':
-                        # Append each interim thought as its own assistant message bubble
-                        conversation.append({'role': 'assistant', 'content': content, 'status': 'thinking', 'id': thought_id})
-                    else:
-                        # Final update: append final assistant message
-                        final_id = thought_id or f"{pid}-final"
-                        conversation.append({'role': 'assistant', 'content': content, 'status': 'done', 'id': final_id})
-            else:
-                # Fallback to single payload behavior for backwards compatibility
-                found = False
-                # support dict payloads from agent on_update
-                if isinstance(resp, dict):
-                    content = resp.get('content')
-                    status = resp.get('status', 'done')
+            for upd in resp:
+                if isinstance(upd, dict):
+                    content = upd.get('content')
+                    status = upd.get('status', 'done')
+                    thought_id = upd.get('thought_id')
+                    is_final = upd.get('is_final', False)
                 else:
-                    content = resp
+                    content = upd
                     status = 'done'
-                for entry in conversation:
-                    if entry.get('role') == 'assistant' and entry.get('id') == pid:
-                        if status == 'thinking':
-                            existing = entry.get('content', '')
-                            if content and content not in existing:
-                                entry['content'] = (existing + '\n' + content) if existing else content
-                            entry['status'] = 'thinking'
-                        else:
-                            entry['content'] = content
-                            entry['status'] = 'done'
-                        found = True
-                        break
-                if not found:
-                    conversation.append({'role': 'assistant', 'content': content, 'status': status})
+                    thought_id = None
+                    is_final = False
+
+                if status == 'thinking':
+                    # Append each interim thought as its own assistant message bubble
+                    conversation.append({'role': 'assistant', 'content': content, 'status': 'thinking', 'id': thought_id})
+                else:
+                    # Final update: append final assistant message
+                    final_id = thought_id or f"{pid}-final"
+                    conversation.append({'role': 'assistant', 'content': content, 'status': 'done', 'id': final_id})
         return conversation, dash.no_update
 
     # If none of the above, do nothing
@@ -240,8 +214,6 @@ def update_chat(conversation):
         else:
             # adjust style if assistant message is still thinking
             style = ASSISTANT_BUBBLE.copy()
-            if entry.get('status') == 'thinking':
-                style.update({'fontStyle': 'italic', 'opacity': '0.7'})
             bubble = html.Div(text, style=style)
             wrapper = html.Div(bubble, style={'display': 'flex', 'justifyContent': 'flex-start'})
 

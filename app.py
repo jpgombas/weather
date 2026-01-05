@@ -4,6 +4,7 @@ Minimal Dash app to expose a single-page chat UI for the WeatherAgent.
 """
 import threading
 import atexit
+import uuid
 from dash import Dash, html, dcc, Input, Output, State
 import dash
 from agent_code import WeatherAgent
@@ -21,6 +22,10 @@ def _shutdown():
         pass
 
 atexit.register(_shutdown)
+
+# Server-side buffer for background responses (thread-safe)
+PENDING_RESPONSES = {}
+PENDING_LOCK = threading.Lock()
 
 # Minimal Dash app
 app = Dash(__name__)
@@ -81,6 +86,8 @@ app.layout = html.Div([
     html.Div([html.H2("Weather Chat", style=HEADER_STYLE),
               html.Div(id='chat-window', style=CHAT_WINDOW_STYLE)], style=CONTAINER_STYLE),
     dcc.Store(id='conversation-store', data=[]),
+    dcc.Store(id='pending-responses', data={}),
+    dcc.Interval(id='poll-interval', interval=1000, n_intervals=0),
     html.Div([
         dcc.Input(id='input-text', type='text', placeholder='Ask about the weather...', style={'flex': '1', 'padding': '10px', 'fontSize': '16px'}),
         html.Button('Send', id='send-button', n_clicks=0, style={'padding': '10px 16px', 'background': '#0b3d91', 'color': 'white', 'border': 'none', 'borderRadius': '6px'})
@@ -93,36 +100,78 @@ app.layout = html.Div([
     Output('input-text', 'value'),
     Input('send-button', 'n_clicks'),
     Input('input-text', 'n_submit'),
+    Input('pending-responses', 'data'),
     State('input-text', 'value'),
     State('conversation-store', 'data'),
     prevent_initial_call=True,
 )
-def send_message(n_clicks, n_submit, value, conversation):
-    # Determine which input triggered the callback
+def handle_send_or_pending(n_clicks, n_submit, pending, value, conversation):
     ctx = dash.callback_context
     if not ctx.triggered:
         raise dash.exceptions.PreventUpdate
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
-    # Only proceed if there's text to send
-    if not value or not value.strip():
-        raise dash.exceptions.PreventUpdate
-
     conversation = conversation or []
-    # Add user message
-    conversation.append({'role': 'user', 'content': value.strip()})
 
-    # Call the agent synchronously (may block while LLM responds)
-    try:
-        response = agent.chat(value.strip())
-    except Exception as e:
-        response = f"Error: {e}"
+    # Handle send-triggered events
+    if triggered_id in ('send-button', 'input-text'):
+        # Only proceed if there's text to send
+        if not value or not value.strip():
+            raise dash.exceptions.PreventUpdate
 
-    # Add assistant message
-    conversation.append({'role': 'assistant', 'content': response})
+        # Add user message
+        conversation.append({'role': 'user', 'content': value.strip()})
 
-    # Return updated conversation and clear input
-    return conversation, ''
+        # Add assistant placeholder message immediately and start background thread to fetch actual response
+        placeholder_id = str(uuid.uuid4())
+        conversation.append({'role': 'assistant', 'content': 'Thinking...', 'id': placeholder_id, 'status': 'thinking'})
+
+        def _background_chat(user_text, pid):
+            try:
+                resp = agent.chat(user_text)
+            except Exception as e:
+                resp = f"Error: {e}"
+            with PENDING_LOCK:
+                PENDING_RESPONSES[pid] = resp
+
+        threading.Thread(target=_background_chat, args=(value.strip(), placeholder_id), daemon=True).start()
+
+        # Return updated conversation and clear input
+        return conversation, ''
+
+    # Handle pending response application
+    if triggered_id == 'pending-responses':
+        if not pending:
+            raise dash.exceptions.PreventUpdate
+        for pid, resp in pending.items():
+            found = False
+            for entry in conversation:
+                if entry.get('role') == 'assistant' and entry.get('id') == pid:
+                    entry['content'] = resp
+                    entry['status'] = 'done'
+                    found = True
+                    break
+            if not found:
+                # If no placeholder found, append as a new assistant message
+                conversation.append({'role': 'assistant', 'content': resp, 'status': 'done'})
+        return conversation, dash.no_update
+
+    # If none of the above, do nothing
+    raise dash.exceptions.PreventUpdate
+
+
+@app.callback(
+    Output('pending-responses', 'data'),
+    Input('poll-interval', 'n_intervals'),
+)
+def poll_pending(n_intervals):
+    # Copy and clear server-side pending responses
+    with PENDING_LOCK:
+        if not PENDING_RESPONSES:
+            return {}
+        copy = dict(PENDING_RESPONSES)
+        PENDING_RESPONSES.clear()
+    return copy
 
 
 @app.callback(
@@ -145,7 +194,11 @@ def update_chat(conversation):
             bubble = html.Div(text, style=USER_BUBBLE)
             wrapper = html.Div(bubble, style={'display': 'flex', 'justifyContent': 'flex-end'})
         else:
-            bubble = html.Div(text, style=ASSISTANT_BUBBLE)
+            # adjust style if assistant message is still thinking
+            style = ASSISTANT_BUBBLE.copy()
+            if entry.get('status') == 'thinking':
+                style.update({'fontStyle': 'italic', 'opacity': '0.7'})
+            bubble = html.Div(text, style=style)
             wrapper = html.Div(bubble, style={'display': 'flex', 'justifyContent': 'flex-start'})
 
         messages.append(wrapper)
